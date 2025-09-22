@@ -12,6 +12,8 @@ single_img = 'images/baby_happy.jpg'
 filters = loadmat('filters/filters.mat')
 
 def resize(in_directory , out_directory, size = (1000,1000)):
+    os.makedirs(out_directory, exist_ok=True)
+    saved = []
     for filename in os.listdir(in_directory):
         path = os.path.join(in_directory, filename)
         img = cv2.imread(path, cv2.IMREAD_COLOR)
@@ -19,17 +21,29 @@ def resize(in_directory , out_directory, size = (1000,1000)):
         img_resized = cv2.resize(img, size)
         out_path = os.path.join(out_directory, filename)
         cv2.imwrite(out_path, img_resized)
+        saved.append(out_path)
+    return saved
 
 def black_and_white(in_directory, out_directory):
+    os.makedirs(out_directory, exist_ok=True)
+    saved = [] 
     for filename in os.listdir(in_directory):
-        path = os.path.join(in_directory, filename)
-        img = cv2.imread(path)
+        in_path = os.path.join(in_directory, filename)
+        img = cv2.imread(in_path)
 
         img_black_and_white = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         out_path = os.path.join(out_directory, filename)
         cv2.imwrite(out_path, img_black_and_white)
+        saved.append(out_path)
+    return saved
+
+def load_filter_bank(mat_path):
+    md = loadmat(mat_path)
+
+    for key in ('F', 'filters, 'filter)
 
 def convolve(filters, image):
+    filter_array = 
     for filter in filters:
 
 
