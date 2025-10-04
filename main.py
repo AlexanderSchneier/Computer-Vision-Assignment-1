@@ -344,3 +344,168 @@ for fname in ["cardinal1.jpg", "leopard1.jpg", "panda1.jpg"]:
     out_png = os.path.join(OUT_DIR, f"{os.path.splitext(fname)[0]}.png")
     visualize_keypoints(img, x, y, scores, out_png)
 
+#part F
+
+def compute_features(x, y, scores, Ix, Iy):
+    H, W = Ix.shape
+    x = np.asarray(x).flatten().astype(int)
+    y = np.asarray(y).flatten().astype(int)
+    n = x.size
+
+    mag   = np.hypot(Ix, Iy)
+    theta = np.degrees(np.arctan2(Iy, Ix))
+    theta = ((theta + 90.0) % 180.0) - 90.0 
+
+    features = np.zeros((n, 8), dtype=np.float32)
+    bin_width = 22.5  
+
+    for i in range(n):
+        cx, cy = x[i], y[i]
+
+        if cx < 5 or cx > W - 6 or cy < 5 or cy > H - 6:
+            continue 
+
+        mpatch = mag  [cy-5:cy+6, cx-5:cx+6]
+        apatch = theta[cy-5:cy+6, cx-5:cx+6]
+
+        valid = mpatch > 0 
+        if not np.any(valid):
+            continue
+
+        m = mpatch[valid].astype(np.float32)
+        a = apatch[valid]
+
+        bins = np.floor((a + 90.0) / bin_width).astype(int)
+        bins = np.clip(bins, 0, 7)
+
+        hist = np.zeros(8, dtype=np.float32)
+        for b in range(8):
+            if np.any(bins == b):
+                hist[b] = m[bins == b].sum(dtype=np.float32)
+
+        hnorm = np.linalg.norm(hist) + 1e-8
+        hist = hist / hnorm
+        hist = np.minimum(hist, 0.2, dtype=np.float32)
+        hnorm2 = np.linalg.norm(hist) + 1e-8
+        hist = (hist / hnorm2).astype(np.float32)
+
+        features[i, :] = hist
+
+    return features
+
+#part G
+
+def computeBOWRepr(features, means):
+    features = np.asarray(features, dtype=np.float32)
+    means    = np.asarray(means,    dtype=np.float32)
+    if means.ndim != 2 or means.shape[1] != 8:
+        raise ValueError("means must be (k, 8)")
+    if features.size == 0:
+        return np.zeros(means.shape[0], dtype=np.float32)
+
+    k = means.shape[0]
+    dists = np.sum((features[:, None, :] - means[None, :, :])**2, axis=2)
+    closest = np.argmin(dists, axis=1)               # (n,)
+    counts = np.bincount(closest, minlength=k).astype(np.float32)  # (k,)
+
+    total = counts.sum()
+    return counts / total if total > 0 else counts
+
+#part H
+
+TEST_SIZE = (100, 100)
+RESULTS_DOC = "results.doc"
+
+def read_color_resized(path, size=TEST_SIZE):
+    img = cv2.imread(path, cv2.IMREAD_COLOR)
+    if img is None:
+        raise FileNotFoundError(f"Could not read {path}")
+    return cv2.resize(img, size, interpolation=cv2.INTER_AREA)
+
+def euclid(a, b):
+    a = np.asarray(a, dtype=np.float64).ravel()
+    b = np.asarray(b, dtype=np.float64).ravel()
+    return float(np.linalg.norm(a - b))
+
+# Load cluster means for BOW (expects a (k,8) array in mean.mat)
+means_mat = loadmat("filters/means.mat")
+means_key = None
+for k_ in means_mat:
+    arr = means_mat[k_]
+    if isinstance(arr, np.ndarray) and arr.ndim == 2 and arr.shape[1] == 8:
+        means_key = k_
+        break
+if means_key is None:
+    raise KeyError("mean.mat does not contain a (k,8) cluster mean matrix.")
+cluster_means = means_mat[means_key].astype(np.float32)
+
+# Compute representations for all six images
+image_keys = []
+reps = {}  # key -> {"class": str, "t_concat": vec, "t_mean": vec, "bow": vec}
+
+for cls, files in categories.items():
+    for fname in files:
+        path = os.path.join(IMG_DIR, fname)
+
+        # Texture reps (force 100x100 for this part)
+        tex_concat, tex_mean = computeTextureReprs(path, F, size=TEST_SIZE)
+
+        # Keypoints + descriptors for BOW
+        img_bgr = read_color_resized(path, TEST_SIZE)
+        x, y, scores, IxH, IyH = extract_keypoints(
+            img_bgr, k=0.05, window_size=5, use_avg_times=5.0, top_percent=None
+        )
+        feats = compute_features(x, y, scores, IxH, IyH)  # (n,8)
+        bow = computeBOWRepr(feats, cluster_means)        # (k,)
+
+        key = f"{cls}/{fname}"
+        reps[key] = {"class": cls, "t_concat": tex_concat, "t_mean": tex_mean, "bow": bow}
+        image_keys.append(key)
+
+def compute_ratio(rep_name: str):
+    within, between = [], []
+    for i in range(len(image_keys)):
+        for j in range(i + 1, len(image_keys)):
+            a_key, b_key = image_keys[i], image_keys[j]
+            a_cls, b_cls = reps[a_key]["class"], reps[b_key]["class"]
+            d = euclid(reps[a_key][rep_name], reps[b_key][rep_name])
+            (within if a_cls == b_cls else between).append(d)
+    w = float(np.mean(within)) if within else float("nan")
+    b = float(np.mean(between)) if between else float("nan")
+    ratio = (w / b) if (np.isfinite(w) and np.isfinite(b) and b > 0) else float("nan")
+    return w, b, ratio
+
+w_bow, b_bow, r_bow = compute_ratio("bow")
+w_tc,  b_tc,  r_tc  = compute_ratio("t_concat")
+w_tm,  b_tm,  r_tm  = compute_ratio("t_mean")
+
+print("[Part H] average_within / average_between ratios:")
+print(f"  BOW:                {r_bow:.6f}")
+print(f"  Texture (concat):   {r_tc:.6f}")
+print(f"  Texture (mean):     {r_tm:.6f}")
+
+# Write results to a Word-openable text doc
+def vec_full_str(v):
+    v = np.asarray(v)
+    return np.array2string(v, precision=6, separator=", ", threshold=v.size, max_line_width=10_000_000)
+
+with open(RESULTS_DOC, "w", encoding="utf-8") as f:
+    f.write("Results for Part H: Representation Quality Test\n")
+    f.write("================================================\n\n")
+    f.write("Per-image representations (k may vary based on mean.mat):\n\n")
+    for key in image_keys:
+        cls = reps[key]["class"]
+        bow = reps[key]["bow"]
+        tmean = reps[key]["t_mean"]
+        tconcat = reps[key]["t_concat"]
+        f.write(f"Image: {key}  (class={cls})\n")
+        f.write(f"  bow_repr (k={bow.shape[0]}):\n{vec_full_str(bow)}\n")
+        f.write(f"  texture_repr_mean (len={tmean.shape[0]}):\n{vec_full_str(tmean)}\n")
+        f.write(f"  texture_repr_concat (len={tconcat.shape[0]}):\n{vec_full_str(tconcat)}\n\n")
+
+    f.write("Average distance means and ratios (within / between):\n")
+    f.write(f"  BOW:            within={w_bow:.6f}  between={b_bow:.6f}  ratio={r_bow:.6f}\n")
+    f.write(f"  Texture concat: within={w_tc:.6f}   between={b_tc:.6f}   ratio={r_tc:.6f}\n")
+    f.write(f"  Texture mean:   within={w_tm:.6f}   between={b_tm:.6f}   ratio={r_tm:.6f}\n")
+
+print(f"[Part H] Wrote results to {RESULTS_DOC}")
